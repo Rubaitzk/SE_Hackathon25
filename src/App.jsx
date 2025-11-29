@@ -362,7 +362,7 @@ const App = () => {
         // Active Call UI
         <>
           <div className="call-screen">
-            {/* Main Remote Video */}
+            {/* Main Remote Video - Left Side */}
             <div className="video-main">
               <video
                 ref={remoteVideoRef}
@@ -371,68 +371,73 @@ const App = () => {
                 className="remote-video"
               />
               <div className="video-label">Partner</div>
-            </div>
 
-            {/* Local Video (Bottom Right) */}
-            <div className="video-pip">
-              <video
-                ref={localVideoRef}
-                autoPlay
-                muted
-                playsInline
-                className="local-video"
-              />
-              <div className="video-label-small">You</div>
-            </div>
+              {/* Local Video (Bottom Right of Main) */}
+              <div className="video-pip">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="local-video"
+                />
+                <div className="video-label-small">You</div>
+              </div>
 
-            {/* Top Controls Bar */}
-            <div className="top-controls">
-              <div className="status-badge">{status}</div>
-              
-              <div className="controls-group">
-                <button 
-                  onClick={toggleMic} 
-                  className={`control-btn ${micOn ? 'active' : ''}`}
-                  title="Toggle Microphone"
-                >
-                  {micOn ? '🎤' : '🔇'}
-                </button>
-                <button 
-                  onClick={toggleCamera} 
-                  className={`control-btn ${cameraOn ? 'active' : ''}`}
-                  title="Toggle Camera"
-                >
-                  {cameraOn ? '📷' : '📹'}
-                </button>
+              {/* Top Controls Bar */}
+              <div className="top-controls">
+                <div className="status-badge">{status}</div>
+                
+                <div className="controls-group">
+                  <button 
+                    onClick={toggleMic} 
+                    className={`control-btn ${micOn ? 'active' : ''}`}
+                    title="Toggle Microphone"
+                  >
+                    {micOn ? '🎤' : '🔇'}
+                  </button>
+                  <button 
+                    onClick={toggleCamera} 
+                    className={`control-btn ${cameraOn ? 'active' : ''}`}
+                    title="Toggle Camera"
+                  >
+                    {cameraOn ? '📷' : '📹'}
+                  </button>
+                  <button 
+                    onClick={endCall} 
+                    className="control-btn end-btn"
+                    title="End Call"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Language Selection & Captions */}
-            <div className="bottom-panel">
-              <div className="language-selector">
-                <label>Translate to:</label>
-                <select 
-                  value={targetLang} 
-                  onChange={(e) => setTargetLang(e.target.value)}
-                  className="lang-select"
-                >
-                  <option value="es">🇪🇸 Spanish</option>
-                  <option value="fr">🇫🇷 French</option>
-                  <option value="de">🇩🇪 German</option>
-                  <option value="ja">🇯🇵 Japanese</option>
-                  <option value="pt">🇵🇹 Portuguese</option>
-                  <option value="it">🇮🇹 Italian</option>
-                  <option value="ur">🇵🇰 Urdu</option>
-                </select>
-              </div>
+            {/* Right Sidebar - Language & Captions */}
+            <div className="right-sidebar">
+              <div className="sidebar-content">
+                <div className="language-selector">
+                  <label>Translate to:</label>
+                  <select 
+                    value={targetLang} 
+                    onChange={(e) => setTargetLang(e.target.value)}
+                    className="lang-select"
+                  >
+                    <option value="es">🇪🇸 Spanish</option>
+                    <option value="fr">🇫🇷 French</option>
+                    <option value="de">🇩🇪 German</option>
+                    <option value="ja">🇯🇵 Japanese</option>
+                    <option value="pt">🇵🇹 Portuguese</option>
+                    <option value="it">🇮🇹 Italian</option>
+                    <option value="ur">🇵🇰 Urdu</option>
+                  </select>
+                </div>
 
-              <div className="captions-box">
-                <p className="captions-text">{captions}</p>
+                <div className="captions-box">
+                  <p className="captions-text">{captions}</p>
+                </div>
               </div>
-
-              <button onClick={endCall} className="end-call-btn">
-                📞 End Call
-              </button>
             </div>
           </div>
         </>
