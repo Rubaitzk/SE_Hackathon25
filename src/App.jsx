@@ -1,206 +1,442 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Peer from 'peerjs';
-import './App.css'; // We will add simple styles next
+import './App.css';
 
 const App = () => {
+  // States
   const [myId, setMyId] = useState('');
   const [remoteId, setRemoteId] = useState('');
-  const [captions, setCaptions] = useState('Waiting for conversation...');
-  const [targetLang, setTargetLang] = useState('eng'); // Default Spanish
-  const [status, setStatus] = useState('Idle');
+  const [remoteIdInput, setRemoteIdInput] = useState('');
+  const [captions, setCaptions] = useState('🎤 Waiting for speech...');
+  const [targetLang, setTargetLang] = useState('es');
+  const [status, setStatus] = useState('Initializing...');
+  const [isCallActive, setIsCallActive] = useState(false);
+  const [recognitionActive, setRecognitionActive] = useState(false);
+  const [micOn, setMicOn] = useState(true);
+  const [cameraOn, setCameraOn] = useState(true);
 
+  // Refs
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const peerInstance = useRef(null);
-  const connInstance = useRef(null); // For Data (Text)
-  
+  const connInstance = useRef(null);
+  const localStreamRef = useRef(null);
+  const callInstanceRef = useRef(null);
+  const targetLangRef = useRef(targetLang);
+  const recognitionRef = useRef(null);
+
+  // Keep ref in sync
+  useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
+
+  // Initialize Web Speech API
   useEffect(() => {
-    // 1. Initialize PeerJS
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        setRecognitionActive(true);
+      };
+
+      recognition.onresult = (event) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+
+        if (finalTranscript.trim()) {
+          const text = finalTranscript.trim();
+          console.log('🎤 Final:', text);
+          setStatus('✅ Sending...');
+          
+          if (connInstance.current && connInstance.current.open) {
+            connInstance.current.send(text);
+            setTimeout(() => {
+              if (isCallActive) setStatus('🎤 Listening...');
+            }, 1200);
+          }
+        }
+
+        if (interimTranscript) {
+          setCaptions(`🎙️ ${interimTranscript}`);
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        setStatus(`⚠️ Error: ${event.error}`);
+      };
+
+      recognition.onend = () => {
+        setRecognitionActive(false);
+        if (isCallActive) {
+          recognition.start();
+        }
+      };
+
+      recognitionRef.current = recognition;
+    }
+  }, [isCallActive]);
+
+  // Handle incoming translated text
+  const handleIncomingText = async (text) => {
+    if (!text || text.trim().length === 0) return;
+    
+    try {
+      const lang = targetLangRef.current || 'es';
+      const langMap = { es: 'es', fr: 'fr', de: 'de', ja: 'ja', ur: 'ur', pt: 'pt', it: 'it', zh: 'zh-CN' };
+      const langCode = langMap[lang] || 'es';
+
+      const response = await fetch(
+        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${langCode}`,
+        { method: 'GET' }
+      );
+      
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      
+      const data = await response.json();
+      
+      if (data.responseStatus === 200 && data.responseData?.translatedText) {
+        const translated = data.responseData.translatedText;
+        console.log(`[Translation] "${text}" -> "${translated}" (${lang})`);
+        setCaptions(`📝 ${translated}`);
+      } else {
+        console.warn('Translation service error:', data);
+        setCaptions(`📝 ${text}`);
+      }
+    } catch (error) {
+      console.error('Translation Error:', error);
+      setCaptions(`📝 ${text}`);
+    }
+  };
+
+  // Setup PeerJS
+  useEffect(() => {
     const peer = new Peer();
+    peerInstance.current = peer;
 
     peer.on('open', (id) => {
       setMyId(id);
-      setStatus('Online - Ready to connect');
+      setStatus('✅ Ready to connect');
     });
 
-    // Handle incoming video calls
     peer.on('call', (call) => {
+      setStatus('📞 Incoming call...');
+      setRemoteId(call.peer);
+      setIsCallActive(true);
+      
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
         .then((stream) => {
-          localVideoRef.current.srcObject = stream;
-          call.answer(stream); // Answer the call with our stream
+          localStreamRef.current = stream;
+          if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+          call.answer(stream);
+          callInstanceRef.current = call;
+
           call.on('stream', (remoteStream) => {
-            remoteVideoRef.current.srcObject = remoteStream;
+            if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
           });
-          setupSpeechRecognition(); // Start listening
-          setStatus('Connected (Call)');
+
+          setStatus('✅ Connected');
+          startListening();
+        })
+        .catch((err) => {
+          console.error('getUserMedia failed', err);
+          setStatus('❌ Media access denied');
         });
     });
 
-    // Handle incoming data connections (for Captions)
     peer.on('connection', (conn) => {
-      conn.on('data', async (data) => {
-        // data is the text from the other person
-        handleIncomingText(data);
-      });
+      connInstance.current = conn;
+      conn.on('data', (data) => handleIncomingText(data));
       conn.on('open', () => {
-        connInstance.current = conn;
+        setStatus('✅ Connected');
       });
     });
 
-    peerInstance.current = peer;
-
-    // Cleanup on unmount
     return () => {
-        peer.destroy();
+      stopListening();
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(t => t.stop());
+      }
+      if (peerInstance.current) {
+        peerInstance.current.destroy();
+      }
+    };
+  }, []);
+
+  // Start Web Speech Recognition
+  const startListening = () => {
+    if (recognitionRef.current && !recognitionActive) {
+      try {
+        recognitionRef.current.start();
+        setStatus('🎤 Listening...');
+      } catch (error) {
+        console.error('Error starting recognition:', error);
+      }
     }
-  }, []); // Empty dependency array = runs once on mount
-
-  // --- Helper Functions ---
-
-  const startCall = () => {
-    setStatus('Calling...');
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      .then((stream) => {
-        localVideoRef.current.srcObject = stream;
-        
-        // 1. Call for Video
-        const call = peerInstance.current.call(remoteId, stream);
-        call.on('stream', (remoteStream) => {
-          remoteVideoRef.current.srcObject = remoteStream;
-        });
-
-        // 2. Connect for Data (Text)
-        const conn = peerInstance.current.connect(remoteId);
-        conn.on('open', () => {
-          connInstance.current = conn;
-          setStatus('Connected');
-          setupSpeechRecognition();
-        });
-      })
-      .catch(err => console.error("Failed to get local stream", err));
   };
 
-  const setupSpeechRecognition = () => {
-    // Check browser support
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("Browser does not support Speech API. Please use Chrome.");
+  // Stop Web Speech Recognition
+  const stopListening = () => {
+    if (recognitionRef.current && recognitionActive) {
+      try {
+        recognitionRef.current.stop();
+      } catch (error) {
+        console.error('Error stopping recognition:', error);
+      }
+    }
+  };
+
+  // Start Call
+  const startCall = async () => {
+    if (!remoteIdInput.trim()) {
+      setStatus('⚠️ Please enter a friend ID');
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US'; // We assume input is English for this MVP
-
-    recognition.onresult = (event) => {
-      const lastResult = event.results[event.results.length - 1];
-      const text = lastResult[0].transcript;
-      console.log("My Speech:", text);
-
-      // Send the text to the peer
-      if (connInstance.current && connInstance.current.open) {
-        connInstance.current.send(text);
-      }
-    };
-
-    recognition.start();
-  };
-
-  const handleIncomingText = async (text) => {
-    // We need to use the current state of targetLang, but inside async callbacks
-    // it can be tricky. We'll read the latest value via a simple ref or just
-    // trust the component re-render if we passed it correctly.
-    // For simplicity in this structure, we will use the state directly 
-    // but beware of stale closures if you move this function out.
-    
-    // NOTE: To fix stale closure in useEffect/callback, we'd typically use a ref for lang
-    // but here we just fetch.
+    setStatus('📞 Calling...');
+    setRemoteId(remoteIdInput);
     
     try {
-        // Using MyMemory API
-        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${targetLang}`);
-        const data = await res.json();
-        setCaptions(data.responseData.translatedText);
-    } catch (error) {
-        console.error("Translation Error:", error);
-        setCaptions(text); // Fallback to original text
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStreamRef.current = stream;
+      
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+
+      const call = peerInstance.current.call(remoteIdInput, stream);
+      callInstanceRef.current = call;
+
+      call.on('stream', (remoteStream) => {
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStream;
+        }
+      });
+
+      call.on('close', () => {
+        endCall();
+      });
+
+      const conn = peerInstance.current.connect(remoteIdInput);
+      conn.on('open', () => {
+        connInstance.current = conn;
+        setIsCallActive(true);
+        setStatus('✅ Connected');
+        startListening();
+      });
+      
+      conn.on('data', (data) => handleIncomingText(data));
+    } catch (err) {
+      console.error('Failed to get local stream', err);
+      setStatus('❌ Media error');
     }
   };
 
-  // Needed to update the translation function when language changes
-  // We attach this to a ref so the callback always sees the current lang
-  const targetLangRef = useRef(targetLang);
-  useEffect(() => { targetLangRef.current = targetLang }, [targetLang]);
+  // End Call
+  const endCall = () => {
+    setStatus('Call ended');
+    setIsCallActive(false);
+    setRemoteId('');
+    setRemoteIdInput('');
+    setCaptions('🎤 Waiting for speech...');
+    
+    stopListening();
 
-  // Override the previous handleIncomingText to use Ref (fixes stale closure)
-  const handleIncomingTextRef = async (text) => {
-     try {
-        const lang = targetLangRef.current;
-        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${lang}`);
-        const data = await res.json();
-        setCaptions(data.responseData.translatedText);
-    } catch (error) {
-        setCaptions(text);
+    if (callInstanceRef.current) {
+      callInstanceRef.current.close();
+      callInstanceRef.current = null;
+    }
+
+    if (connInstance.current) {
+      connInstance.current.close();
+      connInstance.current = null;
+    }
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(t => t.stop());
+      localStreamRef.current = null;
+    }
+
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
+
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+
+    setTimeout(() => setStatus('✅ Ready to connect'), 500);
+  };
+
+  // Toggle Mic
+  const toggleMic = () => {
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      if (audioTracks.length > 0) {
+        audioTracks[0].enabled = !audioTracks[0].enabled;
+        setMicOn(audioTracks[0].enabled);
+        if (!audioTracks[0].enabled) {
+          stopListening();
+        } else {
+          startListening();
+        }
+      }
     }
   };
 
-  // Re-bind the data listener when connection exists but language changes?
-  // Actually, easiest is just to call handleIncomingTextRef directly in the 'data' event above.
-  // I will update the useEffect above to call `handleIncomingTextRef`.
+  // Toggle Camera
+  const toggleCamera = () => {
+    if (localStreamRef.current) {
+      const videoTracks = localStreamRef.current.getVideoTracks();
+      if (videoTracks.length > 0) {
+        videoTracks[0].enabled = !videoTracks[0].enabled;
+        setCameraOn(videoTracks[0].enabled);
+      }
+    }
+  };
+
+  // Copy ID to clipboard
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(myId);
+    setStatus('✅ ID copied to clipboard!');
+    setTimeout(() => setStatus('✅ Ready to connect'), 2000);
+  };
 
   return (
     <div className="app-container">
-      <header>
-        <h1>⚛️ React Video Translator</h1>
-        <div className="status-bar">Status: {status}</div>
-      </header>
+      {!isCallActive ? (
+        // Pre-Call UI
+        <>
+          <div className="pre-call-screen">
+            <header className="pre-call-header">
+              <h1>🎥 Video Call Translator</h1>
+              <p>Connect with anyone, translate everything</p>
+            </header>
 
-      <div className="controls">
-        <div className="id-box">
-          <label>My ID:</label>
-          <input type="text" value={myId} readOnly />
-          <button onClick={() => navigator.clipboard.writeText(myId)}>Copy</button>
-        </div>
-        
-        <div className="connect-box">
-          <input 
-            type="text" 
-            placeholder="Enter Friend's ID" 
-            value={remoteId} 
-            onChange={(e) => setRemoteId(e.target.value)} 
-          />
-          <button className="call-btn" onClick={startCall}>📞 Call</button>
-        </div>
+            <div className="status-display">{status}</div>
 
-        <div className="lang-box">
-            <label>Translate to: </label>
-            <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)}>
-                <option value="es">Spanish</option>
-                <option value="fr">French</option>
-                <option value="de">German</option>
-                <option value="ja">Japanese</option>
-                <option value="ur">Urdu</option>
-            </select>
-        </div>
-      </div>
+            <div className="id-section">
+              <div className="id-display">
+                <label>Your ID</label>
+                <div className="id-box-display">
+                  <code>{myId || 'Generating...'}</code>
+                  <button onClick={copyToClipboard} className="copy-btn">
+                    📋 Copy
+                  </button>
+                </div>
+              </div>
 
-      <div className="video-grid">
-        <div className="video-card">
-            <video ref={localVideoRef} autoPlay muted playsInline />
-            <span>Me</span>
-        </div>
-        <div className="video-card">
-            <video ref={remoteVideoRef} autoPlay playsInline />
-            <span>Partner</span>
-        </div>
-      </div>
+              <div className="friend-id-section">
+                <label>Call a Friend</label>
+                <input
+                  type="text"
+                  placeholder="Paste friend's ID here"
+                  value={remoteIdInput}
+                  onChange={(e) => setRemoteIdInput(e.target.value)}
+                  className="friend-id-input"
+                  onKeyPress={(e) => e.key === 'Enter' && startCall()}
+                />
+                <button onClick={startCall} className="call-btn">
+                  📞 Call
+                </button>
+              </div>
+            </div>
 
-      <div className="caption-area">
-        <h3>Live Captions:</h3>
-        <p>{captions}</p>
-      </div>
+            <footer className="pre-call-footer">
+              <p>📝 Share your ID with a friend and wait for their call, or paste their ID to call them!</p>
+            </footer>
+          </div>
+        </>
+      ) : (
+        // Active Call UI
+        <>
+          <div className="call-screen">
+            {/* Main Remote Video */}
+            <div className="video-main">
+              <video
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                className="remote-video"
+              />
+              <div className="video-label">Partner</div>
+            </div>
+
+            {/* Local Video (Bottom Right) */}
+            <div className="video-pip">
+              <video
+                ref={localVideoRef}
+                autoPlay
+                muted
+                playsInline
+                className="local-video"
+              />
+              <div className="video-label-small">You</div>
+            </div>
+
+            {/* Top Controls Bar */}
+            <div className="top-controls">
+              <div className="status-badge">{status}</div>
+              
+              <div className="controls-group">
+                <button 
+                  onClick={toggleMic} 
+                  className={`control-btn ${micOn ? 'active' : ''}`}
+                  title="Toggle Microphone"
+                >
+                  {micOn ? '🎤' : '🔇'}
+                </button>
+                <button 
+                  onClick={toggleCamera} 
+                  className={`control-btn ${cameraOn ? 'active' : ''}`}
+                  title="Toggle Camera"
+                >
+                  {cameraOn ? '📷' : '📹'}
+                </button>
+              </div>
+            </div>
+
+            {/* Language Selection & Captions */}
+            <div className="bottom-panel">
+              <div className="language-selector">
+                <label>Translate to:</label>
+                <select 
+                  value={targetLang} 
+                  onChange={(e) => setTargetLang(e.target.value)}
+                  className="lang-select"
+                >
+                  <option value="es">🇪🇸 Spanish</option>
+                  <option value="fr">🇫🇷 French</option>
+                  <option value="de">🇩🇪 German</option>
+                  <option value="ja">🇯🇵 Japanese</option>
+                  <option value="pt">🇵🇹 Portuguese</option>
+                  <option value="it">🇮🇹 Italian</option>
+                  <option value="ur">🇵🇰 Urdu</option>
+                </select>
+              </div>
+
+              <div className="captions-box">
+                <p className="captions-text">{captions}</p>
+              </div>
+
+              <button onClick={endCall} className="end-call-btn">
+                📞 End Call
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
